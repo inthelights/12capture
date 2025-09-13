@@ -21,15 +21,17 @@ export default function Home() {
   const [stream, setStream] = useState<MediaStream | null>(null)
 
   const extractSeedPhrase = (text: string): string => {
+    console.log('Extracting seed phrase from text:', text)
+    
     // Look for numbered seed phrases - handle multiple formats
     const matches: { number: number; word: string }[] = []
     
     // Try different patterns to find numbered words
     const patterns = [
-      // Pattern 1: "1 word 2 word" (space separated, most common)
-      /(\d+)\s+([a-z]+)/gi,
-      // Pattern 2: "1. word 2. word" (dot separated)
+      // Pattern 1: "1. word 2. word" (dot separated, most common in screenshots)
       /(\d+)\.\s*([a-z]+)/gi,
+      // Pattern 2: "1 word 2 word" (space separated)
+      /(\d+)\s+([a-z]+)/gi,
       // Pattern 3: "1) word 2) word" (parenthesis separated)
       /(\d+)\)\s*([a-z]+)/gi
     ]
@@ -41,6 +43,8 @@ export default function Home() {
       while ((match = pattern.exec(text)) !== null) {
         const number = parseInt(match[1])
         const word = match[2].trim().toLowerCase()
+        
+        console.log(`Found: ${number}. ${word}`)
         
         // Only collect words numbered 1-12 and ensure it's a valid word
         if (number >= 1 && number <= 12 && word.length > 0 && /^[a-z]+$/.test(word)) {
@@ -58,17 +62,23 @@ export default function Home() {
       }
     }
     
+    console.log('All matches found:', matches)
+    
     // Sort by number and extract words
-    if (matches.length >= 12) {
+    if (matches.length >= 10) { // Lowered threshold to 10 for better detection
       const sortedMatches = matches
         .sort((a, b) => a.number - b.number)
         .slice(0, 12) // Take only first 12
       
-      // Check if we have a good sequence (at least 10 out of 12 numbers)
-      const hasGoodSequence = sortedMatches.length >= 10
+      console.log('Sorted matches:', sortedMatches)
+      
+      // Check if we have a good sequence (at least 8 out of 12 numbers)
+      const hasGoodSequence = sortedMatches.length >= 8
       
       if (hasGoodSequence) {
-        return sortedMatches.map(item => item.word).join(' ')
+        const result = sortedMatches.map(item => item.word).join(' ')
+        console.log('Final extracted phrase:', result)
+        return result
       }
     }
     
@@ -79,10 +89,15 @@ export default function Home() {
       .split(/\s+/)
       .filter(word => word.length > 0 && /^[a-z]+$/.test(word)) // Only alphabetic words
     
+    console.log('Fallback words found:', words)
+    
     if (words.length >= 12) {
-      return words.slice(0, 12).join(' ')
+      const result = words.slice(0, 12).join(' ')
+      console.log('Fallback result:', result)
+      return result
     }
     
+    console.log('No valid seed phrase found')
     return ''
   }
 
@@ -107,24 +122,50 @@ export default function Home() {
     setError('')
     
     try {
-      const { data: { text } } = await Tesseract.recognize(imageData, 'eng', {
-        logger: m => console.log(m)
+      console.log('Starting OCR processing...')
+      
+      // Add timeout to prevent infinite processing
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('OCR processing timeout')), 30000) // 30 second timeout
       })
       
+      const ocrPromise = Tesseract.recognize(imageData, 'eng', {
+        logger: m => {
+          console.log('OCR Progress:', m)
+          if (m.status === 'recognizing text') {
+            console.log(`OCR Progress: ${Math.round(m.progress * 100)}%`)
+          }
+        }
+      })
+      
+      const { data: { text } } = await Promise.race([ocrPromise, timeoutPromise]) as any
+      
+      console.log('OCR completed. Extracted text:', text)
       setExtractedText(text)
+      
       const phrase = extractSeedPhrase(text.toLowerCase())
+      console.log('Extracted phrase:', phrase)
+      
       setSeedPhrase(phrase)
       
       if (phrase) {
+        console.log('Generating QR code...')
         // Generate QR code for the seed phrase
         await generateQRCode(phrase)
+        console.log('QR code generated successfully')
       } else {
+        console.log('No valid seed phrase found')
         setError('No 12-word seed phrase detected. Please ensure the image contains a numbered seed phrase (1. word 2. word ... 12. word) and the text is clear and readable.')
       }
     } catch (err) {
-      setError('Failed to process image. Please try again.')
       console.error('OCR Error:', err)
+      if (err instanceof Error && err.message.includes('timeout')) {
+        setError('Processing timed out. Please try with a clearer image or smaller file size.')
+      } else {
+        setError('Failed to process image. Please try again.')
+      }
     } finally {
+      console.log('Processing completed')
       setIsProcessing(false)
     }
   }
